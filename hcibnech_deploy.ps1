@@ -1,5 +1,6 @@
 # Simple HCIBench OVA Deployment Script for Lab Use
 # Deploys HCIBench OVA with DHCP or Static IP configuration
+# example .\Deploy-HCIBench.ps1 -vCenterServer "vcenter.lab" -Username "administrator@vsphere.local" -Password "VMware123!" -OVAPath "C:\HCIBench.ova" -VMName "HCIBench-01" -DatastoreName "datastore1" -NetworkName "VM Network" -RootPassword "VMware123!"
 
 param(
     [Parameter(Mandatory=$true)]
