@@ -1,6 +1,8 @@
 # Simple HCIBench OVA Deployment Script for Lab Use
 # Deploys HCIBench OVA with DHCP or Static IP configuration
 # .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "hci-bench" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
+# Simple HCIBench OVA Deployment Script for Lab Use
+# Deploys HCIBench OVA with DHCP or Static IP configuration
 
 param(
     [Parameter(Mandatory=$true)]
@@ -90,20 +92,25 @@ try {
     
     Write-Host "Deploying to: $($location.Name) on host: $($vmHost.Name)" -ForegroundColor Yellow
     
-    # Get OVF configuration and show network requirements
+    # Get OVF configuration
     Write-Host "Reading OVA configuration..." -ForegroundColor Green
     $ovfConfig = Get-OvfConfiguration -Ovf $OVAPath
     
-    # Show required networks in OVA
-    Write-Host "Networks required by OVA:" -ForegroundColor Yellow
-    $ovfConfig.NetworkMapping.Keys | ForEach-Object { Write-Host "  - $_" -ForegroundColor Cyan }
-    
-    # Map all required networks to our target network
-    Write-Host "Mapping networks to: $($network.Name)" -ForegroundColor Green
-    foreach ($netKey in $ovfConfig.NetworkMapping.Keys) {
-        $ovfConfig.NetworkMapping.$netKey = $network
-        Write-Host "  $netKey -> $($network.Name)"
+    # Show what networks the OVA actually needs
+    Write-Host "Networks in OVA:" -ForegroundColor Yellow
+    $networkCount = 0
+    $ovfConfig.NetworkMapping.Keys | ForEach-Object {
+        $networkCount++
+        $keyDisplay = if ([string]::IsNullOrWhiteSpace($_)) { "[empty/default]" } else { "'$_'" }
+        Write-Host "  Network $networkCount`: $keyDisplay" -ForegroundColor Cyan
     }
+    
+    # Simple network mapping - just map everything to our target network
+    Write-Host "Mapping all networks to: $($network.Name)" -ForegroundColor Green
+    foreach ($netKey in $ovfConfig.NetworkMapping.Keys) {
+        $ovfConfig.NetworkMapping[$netKey] = $network
+    }
+    Write-Host "  Mapped $networkCount network(s)"
     
     # Configure OVF properties
     $useStaticIP = ![string]::IsNullOrEmpty($IPAddress)
