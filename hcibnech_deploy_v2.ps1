@@ -1,5 +1,4 @@
 # Simple HCIBench OVA Deployment Script for vSAN + DVS environments
-# .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cl
 
 param(
     [Parameter(Mandatory=$true)]
@@ -118,43 +117,26 @@ try {
     Write-Host "Configuring network mappings..." -ForegroundColor Yellow
     Write-Host "OVA networks found:" -ForegroundColor Cyan
     
-    $networkCount = 0
     $networkMappings = @($ovfConfig.NetworkMapping.PSObject.Properties)
-    
     foreach ($netMapping in $networkMappings) {
-        $networkCount++
         $netName = if ([string]::IsNullOrWhiteSpace($netMapping.Name)) { "[Default]" } else { $netMapping.Name }
-        Write-Host "  Network $networkCount`: $netName" -ForegroundColor Cyan
-        
-        # Try direct property assignment first (works for most cases)
-        try {
-            $ovfConfig.NetworkMapping.($netMapping.Name) = $network
-            Write-Host "    ✓ Mapped to $($network.Name) [Method 1]" -ForegroundColor Green
-        } catch {
-            Write-Host "    Method 1 failed, trying alternative..." -ForegroundColor Yellow
-            # Try the Keys approach
+        Write-Host "  - $netName" -ForegroundColor Cyan
+    }
+    
+    # For DVS + vSAN, skip network mapping and configure after deployment
+    if ($networkType -eq "DVS") {
+        Write-Host "⚠ Skipping network mapping for DVS - will configure after deployment" -ForegroundColor Yellow
+    } else {
+        Write-Host "Attempting network mapping for standard networks..." -ForegroundColor Yellow
+        foreach ($netMapping in $networkMappings) {
             try {
-                $ovfConfig.NetworkMapping[$netMapping.Name] = $network
-                Write-Host "    ✓ Mapped to $($network.Name) [Method 2]" -ForegroundColor Green
+                $ovfConfig.NetworkMapping.($netMapping.Name) = $network
+                Write-Host "    ✓ Mapped $($netMapping.Name)" -ForegroundColor Green
             } catch {
-                Write-Host "    Method 2 failed, trying hashtable approach..." -ForegroundColor Yellow
-                # Last resort: build a new hashtable
-                try {
-                    $newMapping = @{}
-                    foreach ($key in $ovfConfig.NetworkMapping.PSObject.Properties.Name) {
-                        $newMapping[$key] = $network
-                    }
-                    $ovfConfig.NetworkMapping = $newMapping
-                    Write-Host "    ✓ Mapped to $($network.Name) [Method 3]" -ForegroundColor Green
-                } catch {
-                    Write-Host "    ✗ All mapping methods failed: $($_.Exception.Message)" -ForegroundColor Red
-                    Write-Host "    Continuing without network mapping..." -ForegroundColor Yellow
-                }
+                Write-Host "    ✗ Failed to map $($netMapping.Name)" -ForegroundColor Red
             }
         }
     }
-    
-    Write-Host "✓ Processed $networkCount network mapping(s)" -ForegroundColor Green
     
     # Configure OVF properties for networking
     $useStaticIP = ![string]::IsNullOrEmpty($IPAddress)
@@ -208,6 +190,21 @@ try {
                      -ErrorAction Stop
     
     Write-Host "✓ OVA deployed successfully!" -ForegroundColor Green
+    
+    # Configure network adapters if we skipped mapping during deployment
+    if ($networkType -eq "DVS") {
+        Write-Host "Configuring network adapters..." -ForegroundColor Yellow
+        try {
+            $networkAdapters = Get-NetworkAdapter -VM $vm
+            foreach ($adapter in $networkAdapters) {
+                Set-NetworkAdapter -NetworkAdapter $adapter -Portgroup $network -Confirm:$false | Out-Null
+                Write-Host "✓ Connected $($adapter.Name) to $($network.Name)" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "⚠ Network adapter configuration failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "  You may need to manually configure the network in vCenter" -ForegroundColor Yellow
+        }
+    }
     
     # Power on VM
     Write-Host "Starting VM..." -ForegroundColor Yellow
