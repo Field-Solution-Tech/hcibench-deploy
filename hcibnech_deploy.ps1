@@ -1,8 +1,5 @@
 # Simple HCIBench OVA Deployment Script for Lab Use
 # Deploys HCIBench OVA with DHCP or Static IP configuration
-# .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "hci-bench" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
-# Simple HCIBench OVA Deployment Script for Lab Use
-# Deploys HCIBench OVA with DHCP or Static IP configuration
 
 param(
     [Parameter(Mandatory=$true)]
