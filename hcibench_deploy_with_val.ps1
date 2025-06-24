@@ -6,10 +6,10 @@ Looking for network 'hci-bench' on esx-07a.site-a.vcf.lab...
 Found network: hci-bench
 Deploying to: cluster-wld01-01a on host: esx-07a.site-a.vcf.lab
 Reading OVA configuration...
-Networks required by OVA:
-  - 
-Mapping networks to: hci-bench
+Networks in OVA:
+  Network 1: [empty/default]
+Mapping all networks to: hci-bench
+  Mapped 1 network(s)
 Configuring DHCP networking
 Deploying OVA...
-Write-Error: Deployment failed: 6/24/2025 5:19:10 AM	Import-VApp		Host did not have any virtual network defined.	
-PS /home/holuser/Desktop/code> 
+Write-Error: Deployment failed: 6/24/2025 5:28:09 AM	Import-VApp		Host did not have any virtual network defined.	
