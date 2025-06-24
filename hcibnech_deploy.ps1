@@ -118,35 +118,42 @@ try {
     Write-Host "OVA networks found:" -ForegroundColor Cyan
     
     $networkCount = 0
-    foreach ($netMapping in $ovfConfig.NetworkMapping.PSObject.Properties) {
+    $networkMappings = @($ovfConfig.NetworkMapping.PSObject.Properties)
+    
+    foreach ($netMapping in $networkMappings) {
         $networkCount++
         $netName = if ([string]::IsNullOrWhiteSpace($netMapping.Name)) { "[Default]" } else { $netMapping.Name }
         Write-Host "  Network $networkCount`: $netName" -ForegroundColor Cyan
         
-        # Use the proper way to set network mapping for DVS
+        # Try direct property assignment first (works for most cases)
         try {
-            if ($networkType -eq "DVS") {
-                # For DVS, we need to use the network object differently
-                $ovfConfig.NetworkMapping.($netMapping.Name) = $network
-            } else {
-                # For standard networks
-                $netMapping.Value = $network
-            }
-            Write-Host "    ✓ Mapped to $($network.Name)" -ForegroundColor Green
+            $ovfConfig.NetworkMapping.($netMapping.Name) = $network
+            Write-Host "    ✓ Mapped to $($network.Name) [Method 1]" -ForegroundColor Green
         } catch {
-            Write-Host "    ✗ Mapping failed: $($_.Exception.Message)" -ForegroundColor Red
-            # Try alternative approach
+            Write-Host "    Method 1 failed, trying alternative..." -ForegroundColor Yellow
+            # Try the Keys approach
             try {
-                $ovfConfig.NetworkMapping.($netMapping.Name) = $network
-                Write-Host "    ✓ Mapped using alternative method" -ForegroundColor Green
+                $ovfConfig.NetworkMapping[$netMapping.Name] = $network
+                Write-Host "    ✓ Mapped to $($network.Name) [Method 2]" -ForegroundColor Green
             } catch {
-                Write-Host "    ✗ All mapping methods failed" -ForegroundColor Red
-                throw "Cannot map network $($netMapping.Name)"
+                Write-Host "    Method 2 failed, trying hashtable approach..." -ForegroundColor Yellow
+                # Last resort: build a new hashtable
+                try {
+                    $newMapping = @{}
+                    foreach ($key in $ovfConfig.NetworkMapping.PSObject.Properties.Name) {
+                        $newMapping[$key] = $network
+                    }
+                    $ovfConfig.NetworkMapping = $newMapping
+                    Write-Host "    ✓ Mapped to $($network.Name) [Method 3]" -ForegroundColor Green
+                } catch {
+                    Write-Host "    ✗ All mapping methods failed: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host "    Continuing without network mapping..." -ForegroundColor Yellow
+                }
             }
         }
     }
     
-    Write-Host "✓ Configured $networkCount network mapping(s)" -ForegroundColor Green
+    Write-Host "✓ Processed $networkCount network mapping(s)" -ForegroundColor Green
     
     # Configure OVF properties for networking
     $useStaticIP = ![string]::IsNullOrEmpty($IPAddress)
