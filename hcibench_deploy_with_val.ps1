@@ -25,8 +25,8 @@ Source: /home/holuser/Downloads/HCIBench_2.8.3.ova
 Target: esx-07a.site-a.vcf.lab in cluster-wld01-01a
 Datastore: cluster-wld01-01a-vsan01
 Network: mgmt-vds01-wld01-01a [DVS]
-✗ Deployment failed: 6/24/2025 6:00:01 AM	Import-VApp		Host did not have any virtual network defined.	
-Full error: VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.OvfNoHostNic: 6/24/2025 6:00:01 AM	Import-VApp		Host did not have any virtual network defined.	
+✗ Deployment failed: 6/24/2025 6:03:59 AM	Import-VApp		Host did not have any virtual network defined.	
+Full error: VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.OvfNoHostNic: 6/24/2025 6:03:59 AM	Import-VApp		Host did not have any virtual network defined.	
    at VMware.VimAutomation.ViCore.Impl.V1.Service.VappServiceImpl.ImportVApp(FileInfo ovfDescriptor, VMHostInterop host, StorageResourceInterop datastore, VIContainerInterop location, FolderContainerInterop inventoryLocation, String importName, Nullable`1 diskStorageFormat, Hashtable ovfPropertySpec, Boolean force)
    at VMware.VimAutomation.ViCore.Cmdlets.Commands.ImportVApp.DoWork(VIAutomation client, List`1 moList)
 Disconnected from vCenter
