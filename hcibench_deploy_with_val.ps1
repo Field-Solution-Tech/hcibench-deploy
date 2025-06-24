@@ -32,5 +32,3 @@ Full error: System.Management.Automation.SetValueInvocationException: Exception 
    at Microsoft.PowerShell.Commands.ForEachObjectCommand.ProcessScriptBlockParameterSet() in /root/parts/powershell/build/src/System.Management.Automation/engine/InternalCommands.cs:line 921
    at System.Management.Automation.CommandProcessor.ProcessRecord() in /root/parts/powershell/build/src/System.Management.Automation/engine/CommandProcessor.cs:line 313
 Disconnected from vCenter
-PS /home/holuser/Desktop/code> 
-
