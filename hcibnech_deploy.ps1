@@ -1,6 +1,8 @@
 # Simple HCIBench OVA Deployment Script for Lab Use
 # Deploys HCIBench OVA with DHCP or Static IP configuration
 # .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "hci-bench" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
+# Simple HCIBench OVA Deployment Script for Lab Use
+# Deploys HCIBench OVA with DHCP or Static IP configuration
 
 param(
     [Parameter(Mandatory=$true)]
@@ -179,26 +181,26 @@ try {
     
     # Deploy the OVA
     Write-Host "Deploying OVA..." -ForegroundColor Green
+    Write-Host "Target host: $($vmHost.Name)"
+    Write-Host "Target location: $($location.Name)"
+    Write-Host "Target datastore: $($datastore.Name)"
     
-    # For cluster deployment, let vCenter choose the host automatically
-    $deployParams = @{
-        Source = $OVAPath
-        OvfConfiguration = $ovfConfig
-        Name = $VMName
-        Location = $location
-        Datastore = $datastore
-        ErrorAction = "Stop"
+    # Try deployment with explicit folder specification
+    try {
+        $vmFolder = Get-Folder -Type VM -Name "vm" -ErrorAction SilentlyContinue
+        if (!$vmFolder) {
+            $vmFolder = Get-Folder -Type VM | Where-Object {$_.Name -eq "vm" -or $_.IsChildTypeFolder} | Select-Object -First 1
+        }
+        
+        $vm = Import-VApp -Source $OVAPath -OvfConfiguration $ovfConfig -Name $VMName `
+            -Location $location -Datastore $datastore -VMHost $vmHost `
+            -InventoryLocation $vmFolder -ErrorAction Stop
+            
+    } catch {
+        Write-Host "Failed with folder, trying without folder..." -ForegroundColor Yellow
+        $vm = Import-VApp -Source $OVAPath -OvfConfiguration $ovfConfig -Name $VMName `
+            -Location $location -Datastore $datastore -VMHost $vmHost -ErrorAction Stop
     }
-    
-    # Only specify VMHost for standalone deployments, let cluster handle host selection
-    if (!$ClusterName) {
-        $deployParams.VMHost = $vmHost
-        Write-Host "Deploying to specific host: $($vmHost.Name)"
-    } else {
-        Write-Host "Deploying to cluster (vCenter will choose host automatically)"
-    }
-    
-    $vm = Import-VApp @deployParams
     
     Write-Host "Starting VM..." -ForegroundColor Green
     Start-VM -VM $vm -Confirm:$false | Out-Null
