@@ -1,5 +1,5 @@
 # .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "mgmt-vds01-wld01-01a" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
-# Simple HCIBench OVA Deployment Script for vSAN + DVS environments
+# HCIBench OVA Deployment Script - Fixed for DVS environments
 
 param(
     [Parameter(Mandatory=$true)]
@@ -60,6 +60,7 @@ try {
     # Get network - DVS first, then standard
     Write-Host "Getting network: $NetworkName" -ForegroundColor Yellow
     $network = $null
+    $networkType = $null
     
     # Try DVS portgroup first
     try {
@@ -114,19 +115,57 @@ try {
     $ovfConfig = Get-OvfConfiguration -Ovf $OVAPath
     Write-Host "✓ OVA configuration loaded" -ForegroundColor Green
     
-    # Show and configure network mappings
+    # Configure network mappings properly for DVS
     Write-Host "Configuring network mappings..." -ForegroundColor Yellow
-    Write-Host "OVA networks found:" -ForegroundColor Cyan
     
-    $networkMappings = @($ovfConfig.NetworkMapping.PSObject.Properties)
-    foreach ($netMapping in $networkMappings) {
-        $netName = if ([string]::IsNullOrWhiteSpace($netMapping.Name)) { "[Default]" } else { $netMapping.Name }
-        Write-Host "  - $netName" -ForegroundColor Cyan
+    if ($networkType -eq "DVS") {
+        # For DVS, we need to handle this differently
+        Write-Host "Configuring for DVS deployment..." -ForegroundColor Yellow
+        
+        # Method 1: Try direct property assignment
+        try {
+            $networkMappings = $ovfConfig.NetworkMapping.PSObject.Properties
+            foreach ($netMapping in $networkMappings) {
+                $netMapping.Value = $network
+                Write-Host "✓ Mapped '$($netMapping.Name)' to DVS portgroup '$($network.Name)'" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "⚠ Standard DVS mapping failed, trying alternative approach..." -ForegroundColor Yellow
+            
+            # Method 2: Create a temporary standard portgroup as workaround
+            try {
+                # Get the virtual switch on the host
+                $vSwitch = Get-VirtualSwitch -VMHost $vmHost -Standard | Select-Object -First 1
+                if (!$vSwitch) {
+                    # Create a temporary vSwitch if none exists
+                    Write-Host "Creating temporary vSwitch for deployment..." -ForegroundColor Yellow
+                    $vSwitch = New-VirtualSwitch -VMHost $vmHost -Name "vSwitch-Temp" -Nic $null
+                }
+                
+                # Create temporary portgroup
+                $tempPGName = "TEMP-HCIBench-Deploy"
+                Write-Host "Creating temporary portgroup '$tempPGName'..." -ForegroundColor Yellow
+                $tempPG = New-VirtualPortGroup -Name $tempPGName -VirtualSwitch $vSwitch -VLanId 0
+                
+                # Map to temporary portgroup
+                foreach ($netMapping in $ovfConfig.NetworkMapping.PSObject.Properties) {
+                    $netMapping.Value = $tempPG
+                    Write-Host "✓ Mapped '$($netMapping.Name)' to temporary portgroup" -ForegroundColor Green
+                }
+                
+                $usedTempPG = $true
+            } catch {
+                Write-Host "⚠ Temporary portgroup creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                $usedTempPG = $false
+            }
+        }
+    } else {
+        # Standard portgroup mapping
+        foreach ($netMapping in $ovfConfig.NetworkMapping.PSObject.Properties) {
+            $netMapping.Value = $network
+            Write-Host "✓ Mapped '$($netMapping.Name)' to '$($network.Name)'" -ForegroundColor Green
+        }
     }
-    
-    # For DVS + vSAN, skip network mapping completely and deploy without it
-    Write-Host "⚠ Skipping network mapping for DVS deployment - will configure after deployment" -ForegroundColor Yellow
-    Write-Host "✓ Network mapping skipped" -ForegroundColor Green
     
     # Configure OVF properties for networking
     $useStaticIP = ![string]::IsNullOrEmpty($IPAddress)
@@ -154,8 +193,27 @@ try {
         # Configure network properties based on type
         if ($useStaticIP) {
             Write-Host "Configuring static IP settings..." -ForegroundColor Yellow
-            # This is where we'd add static IP configuration
-            # For now, we'll just note it
+            # Configure static IP properties
+            @("ip0", "ip", "guestinfo.ip0") | ForEach-Object {
+                if ($propSection.PSObject.Properties[$_]) { 
+                    $propSection.$_.Value = $IPAddress
+                }
+            }
+            @("netmask0", "netmask", "guestinfo.netmask0") | ForEach-Object {
+                if ($propSection.PSObject.Properties[$_]) { 
+                    $propSection.$_.Value = $Netmask
+                }
+            }
+            @("gateway", "guestinfo.gateway") | ForEach-Object {
+                if ($propSection.PSObject.Properties[$_]) { 
+                    $propSection.$_.Value = $Gateway
+                }
+            }
+            @("DNS", "dns", "guestinfo.dns") | ForEach-Object {
+                if ($propSection.PSObject.Properties[$_]) { 
+                    $propSection.$_.Value = $DNS
+                }
+            }
             Write-Host "✓ Static IP configuration prepared" -ForegroundColor Green
         } else {
             Write-Host "✓ DHCP configuration (no additional setup needed)" -ForegroundColor Green
@@ -169,7 +227,7 @@ try {
     Write-Host "Source: $OVAPath"
     Write-Host "Target: $($vmHost.Name) in $($location.Name)"
     Write-Host "Datastore: $($datastore.Name)"
-    Write-Host "Network: $($network.Name) [$networkType]"
+    Write-Host "Network: $(if ($usedTempPG) { 'Temporary portgroup (will reconfigure to DVS)' } else { "$($network.Name) [$networkType]" })"
     
     $vm = Import-VApp -Source $OVAPath `
                      -OvfConfiguration $ovfConfig `
@@ -177,22 +235,32 @@ try {
                      -Location $location `
                      -Datastore $datastore `
                      -VMHost $vmHost `
+                     -DiskStorageFormat Thin `
                      -ErrorAction Stop
     
     Write-Host "✓ OVA deployed successfully!" -ForegroundColor Green
     
-    # Configure network adapters if we skipped mapping during deployment
-    if ($networkType -eq "DVS") {
-        Write-Host "Configuring network adapters..." -ForegroundColor Yellow
+    # If we used temporary portgroup, now reconfigure to DVS
+    if ($usedTempPG -and $networkType -eq "DVS") {
+        Write-Host "Reconfiguring network adapters to DVS..." -ForegroundColor Yellow
         try {
             $networkAdapters = Get-NetworkAdapter -VM $vm
             foreach ($adapter in $networkAdapters) {
                 Set-NetworkAdapter -NetworkAdapter $adapter -Portgroup $network -Confirm:$false | Out-Null
-                Write-Host "✓ Connected $($adapter.Name) to $($network.Name)" -ForegroundColor Green
+                Write-Host "✓ Connected $($adapter.Name) to DVS portgroup '$($network.Name)'" -ForegroundColor Green
+            }
+            
+            # Clean up temporary portgroup
+            Remove-VirtualPortGroup -VirtualPortGroup $tempPG -Confirm:$false
+            Write-Host "✓ Removed temporary portgroup" -ForegroundColor Green
+            
+            # Remove temp vSwitch if we created it
+            if ($vSwitch.Name -eq "vSwitch-Temp") {
+                Remove-VirtualSwitch -VirtualSwitch $vSwitch -Confirm:$false
+                Write-Host "✓ Removed temporary vSwitch" -ForegroundColor Green
             }
         } catch {
-            Write-Host "⚠ Network adapter configuration failed: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host "  You may need to manually configure the network in vCenter" -ForegroundColor Yellow
+            Write-Host "⚠ Network reconfiguration warning: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
     
@@ -204,28 +272,67 @@ try {
     # Wait and check for IP
     Write-Host "Waiting for VM to initialize..." -ForegroundColor Yellow
     Start-Sleep -Seconds 30
-    $vm = Get-VM -Name $VMName
+    
+    # Try to get IP address
+    $retryCount = 0
+    $maxRetries = 6
+    $assignedIP = $null
+    
+    while ($retryCount -lt $maxRetries -and !$assignedIP) {
+        $vm = Get-VM -Name $VMName
+        $assignedIP = $vm.Guest.IPAddress | Where-Object { 
+            $_ -ne "127.0.0.1" -and 
+            $_ -notlike "fe80:*" -and 
+            $_ -ne $null 
+        } | Select-Object -First 1
+        
+        if (!$assignedIP) {
+            Write-Host "Waiting for IP address... ($($retryCount + 1)/$maxRetries)" -ForegroundColor Yellow
+            Start-Sleep -Seconds 10
+            $retryCount++
+        }
+    }
     
     Write-Host "`n=== Deployment Complete ===" -ForegroundColor Green
     Write-Host "VM Name: $($vm.Name)"
     Write-Host "Power State: $($vm.PowerState)"
     Write-Host "Host: $($vm.VMHost.Name)"
+    Write-Host "Network: $($network.Name)"
     
-    $assignedIP = $vm.Guest.IPAddress | Where-Object { $_ -ne "127.0.0.1" -and $_ -ne $null } | Select-Object -First 1
     if ($assignedIP) {
-        Write-Host "IP Address: $assignedIP"
+        Write-Host "IP Address: $assignedIP" -ForegroundColor Cyan
         Write-Host "Web Interface: https://$assignedIP:8443" -ForegroundColor Cyan
     } else {
         Write-Host "IP Address: Not yet available (check VM console)" -ForegroundColor Yellow
         Write-Host "Web Interface: https://[VM_IP]:8443" -ForegroundColor Cyan
+        Write-Host "Note: HCIBench may take a few minutes to obtain an IP via DHCP" -ForegroundColor Yellow
     }
     
-    Write-Host "Login: root / [your_password]" -ForegroundColor Cyan
+    Write-Host "Login: root / $RootPassword" -ForegroundColor Cyan
+    Write-Host "`nNext steps:" -ForegroundColor Green
+    Write-Host "1. Access the web interface at https://[VM_IP]:8443" -ForegroundColor White
+    Write-Host "2. Complete the HCIBench configuration wizard" -ForegroundColor White
+    Write-Host "3. Configure vSAN test parameters" -ForegroundColor White
     
 } catch {
     Write-Host "✗ Deployment failed: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Full error: $($_.Exception.ToString())" -ForegroundColor Red
+    
+    # Additional troubleshooting info
+    if ($_.Exception.Message -like "*Host did not have any virtual network defined*") {
+        Write-Host "`nTroubleshooting tips:" -ForegroundColor Yellow
+        Write-Host "- This error typically occurs with DVS network mappings" -ForegroundColor Yellow
+        Write-Host "- The script attempted to work around this by creating temporary portgroups" -ForegroundColor Yellow
+        Write-Host "- You may need to manually deploy the OVA through vCenter UI" -ForegroundColor Yellow
+    }
 } finally {
+    # Clean up any temporary resources if they exist
+    if ($tempPG) {
+        try {
+            Remove-VirtualPortGroup -VirtualPortGroup $tempPG -Confirm:$false -ErrorAction SilentlyContinue
+        } catch {}
+    }
+    
     if ($global:DefaultVIServers) {
         Disconnect-VIServer -Server * -Confirm:$false -Force
         Write-Host "Disconnected from vCenter" -ForegroundColor Gray
