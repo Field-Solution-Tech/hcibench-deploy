@@ -1,5 +1,6 @@
 # Alternative deployment approach for pure DVS environments
 # This script uses a different method to deploy the OVA
+# .\hcibench_deploy_alternate.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3
 
 param(
     [Parameter(Mandatory=$true)]
