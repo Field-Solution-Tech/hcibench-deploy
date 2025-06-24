@@ -15,20 +15,26 @@ Reading OVA configuration...
 Configuring network mappings...
 OVA networks found:
   Network 1: Management_Network
-✗ Deployment failed: Exception setting "Value": "Operation is not valid due to the current state of the object."
-Full error: System.Management.Automation.SetValueInvocationException: Exception setting "Value": "Operation is not valid due to the current state of the object."
- ---> System.InvalidOperationException: Operation is not valid due to the current state of the object.
-   at VMware.VimAutomation.Sdk.Util10Ps.ObjectCustomization.SimpleExtensionProperty.set_Value(Object value)
-   at CallSite.Target(Closure, CallSite, Object, Object)
-   --- End of inner exception stack trace ---
-   at System.Management.Automation.ExceptionHandlingOps.CheckActionPreference(FunctionContext funcContext, Exception exception) in /root/parts/powershell/build/src/System.Management.Automation/engine/runtime/Operations/MiscOps.cs:line 1791
-   at System.Management.Automation.Interpreter.ActionCallInstruction`2.Run(InterpretedFrame frame) in /root/parts/powershell/build/src/System.Management.Automation/engine/interpreter/CallInstruction.Generated.cs:line 504
-   at System.Management.Automation.Interpreter.EnterTryCatchFinallyInstruction.Run(InterpretedFrame frame) in /root/parts/powershell/build/src/System.Management.Automation/engine/interpreter/ControlFlowInstructions.cs:line 389
-   at System.Management.Automation.Interpreter.EnterTryCatchFinallyInstruction.Run(InterpretedFrame frame) in /root/parts/powershell/build/src/System.Management.Automation/engine/interpreter/ControlFlowInstructions.cs:line 355
-   at System.Management.Automation.Interpreter.Interpreter.Run(InterpretedFrame frame) in /root/parts/powershell/build/src/System.Management.Automation/engine/interpreter/Interpreter.cs:line 105
-   at System.Management.Automation.Interpreter.LightLambda.RunVoid1[T0](T0 arg0) in /root/parts/powershell/build/src/System.Management.Automation/engine/interpreter/LightLambda.Generated.cs:line 81
-   at System.Management.Automation.ScriptBlock.InvokeWithPipeImpl(ScriptBlockClauseToInvoke clauseToInvoke, Boolean createLocalScope, Dictionary`2 functionsToDefine, List`1 variablesToDefine, ErrorHandlingBehavior errorHandlingBehavior, Object dollarUnder, Object input, Object scriptThis, Pipe outputPipe, InvocationInfo invocationInfo, Object[] args) in /root/parts/powershell/build/src/System.Management.Automation/engine/runtime/CompiledScriptBlock.cs:line 1211
-   at System.Management.Automation.ScriptBlock.InvokeWithPipe(Boolean useLocalScope, ErrorHandlingBehavior errorHandlingBehavior, Object dollarUnder, Object input, Object scriptThis, Pipe outputPipe, InvocationInfo invocationInfo, Boolean propagateAllExceptionsToTop, List`1 variablesToDefine, Dictionary`2 functionsToDefine, Object[] args) in /root/parts/powershell/build/src/System.Management.Automation/engine/lang/scriptblock.cs:line 980
-   at Microsoft.PowerShell.Commands.ForEachObjectCommand.ProcessScriptBlockParameterSet() in /root/parts/powershell/build/src/System.Management.Automation/engine/InternalCommands.cs:line 921
-   at System.Management.Automation.CommandProcessor.ProcessRecord() in /root/parts/powershell/build/src/System.Management.Automation/engine/CommandProcessor.cs:line 313
+    Method 1 failed, trying alternative...
+    Method 2 failed, trying hashtable approach...
+    ✗ All mapping methods failed: Operation is not valid due to the current state of the object.
+    Continuing without network mapping...
+  Network 2: VM_Network
+    Method 1 failed, trying alternative...
+    Method 2 failed, trying hashtable approach...
+    ✗ All mapping methods failed: Operation is not valid due to the current state of the object.
+    Continuing without network mapping...
+✓ Processed 2 network mapping(s)
+Network configuration: DHCP
+✓ Using OVF property section: Common
+✓ DHCP configuration (no additional setup needed)
+=== Starting OVA Deployment ===
+Source: /home/holuser/Downloads/HCIBench_2.8.3.ova
+Target: esx-07a.site-a.vcf.lab in cluster-wld01-01a
+Datastore: cluster-wld01-01a-vsan01
+Network: mgmt-vds01-wld01-01a [DVS]
+✗ Deployment failed: 6/24/2025 5:54:24 AM	Import-VApp		Host did not have any virtual network defined.	
+Full error: VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.OvfNoHostNic: 6/24/2025 5:54:24 AM	Import-VApp		Host did not have any virtual network defined.	
+   at VMware.VimAutomation.ViCore.Impl.V1.Service.VappServiceImpl.ImportVApp(FileInfo ovfDescriptor, VMHostInterop host, StorageResourceInterop datastore, VIContainerInterop location, FolderContainerInterop inventoryLocation, String importName, Nullable`1 diskStorageFormat, Hashtable ovfPropertySpec, Boolean force)
+   at VMware.VimAutomation.ViCore.Cmdlets.Commands.ImportVApp.DoWork(VIAutomation client, List`1 moList)
 Disconnected from vCenter
