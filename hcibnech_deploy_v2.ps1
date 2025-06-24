@@ -1,5 +1,5 @@
-# .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "mgmt-vds01-wld01-01a" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
-# HCIBench OVA Deployment Script - Fixed for DVS environments
+# Alternative deployment approach for pure DVS environments
+# This script uses a different method to deploy the OVA
 
 param(
     [Parameter(Mandatory=$true)]
@@ -28,12 +28,6 @@ param(
     
     [string]$ResourcePoolName,
     
-    # Network Settings - Leave IPAddress empty for DHCP
-    [string]$IPAddress = "",
-    [string]$Netmask = "24", 
-    [string]$Gateway = "",
-    [string]$DNS = "",
-    
     [Parameter(Mandatory=$true)]
     [string]$RootPassword
 )
@@ -42,296 +36,172 @@ param(
 Import-Module VMware.PowerCLI -ErrorAction Stop
 Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -Scope Session | Out-Null
 
+function Find-ExistingPortgroup {
+    param($VMHost)
+    
+    # Look for any existing standard portgroup we can use temporarily
+    $existingPG = Get-VirtualPortGroup -VMHost $VMHost -Standard | 
+                  Where-Object { $_.Name -ne "VM Network" } | 
+                  Select-Object -First 1
+    
+    if (!$existingPG) {
+        # If no other portgroups, check if VM Network exists
+        $existingPG = Get-VirtualPortGroup -VMHost $VMHost -Standard -Name "VM Network" -ErrorAction SilentlyContinue
+    }
+    
+    return $existingPG
+}
+
 try {
     Write-Host "=== HCIBench Deployment Starting ===" -ForegroundColor Green
+    Write-Host "Using alternative deployment method for pure DVS environment" -ForegroundColor Cyan
+    
+    # Connect to vCenter
     Write-Host "Connecting to vCenter: $vCenterServer" -ForegroundColor Yellow
     Connect-VIServer -Server $vCenterServer -User $Username -Password $Password -ErrorAction Stop | Out-Null
     
-    # Get cluster first
-    Write-Host "Getting cluster: $ClusterName" -ForegroundColor Yellow
+    # Get resources
     $cluster = Get-Cluster -Name $ClusterName -ErrorAction Stop
     Write-Host "✓ Found cluster: $($cluster.Name)" -ForegroundColor Green
     
-    # Get datastore 
-    Write-Host "Getting datastore: $DatastoreName" -ForegroundColor Yellow
     $datastore = Get-Datastore -Name $DatastoreName -ErrorAction Stop
-    Write-Host "✓ Found datastore: $($datastore.Name) [$($datastore.Type)]" -ForegroundColor Green
+    Write-Host "✓ Found datastore: $($datastore.Name)" -ForegroundColor Green
     
-    # Get network - DVS first, then standard
-    Write-Host "Getting network: $NetworkName" -ForegroundColor Yellow
-    $network = $null
-    $networkType = $null
+    # Get DVS portgroup
+    $targetNetwork = Get-VDPortgroup -Name $NetworkName -ErrorAction Stop
+    Write-Host "✓ Found DVS portgroup: $($targetNetwork.Name)" -ForegroundColor Green
     
-    # Try DVS portgroup first
-    try {
-        $network = Get-VDPortgroup -Name $NetworkName -ErrorAction Stop
-        Write-Host "✓ Found DVS portgroup: $($network.Name)" -ForegroundColor Green
-        $networkType = "DVS"
-    } catch {
-        # Try standard portgroup
-        try {
-            $network = Get-VirtualPortGroup -Name $NetworkName -ErrorAction Stop
-            Write-Host "✓ Found standard portgroup: $($network.Name)" -ForegroundColor Green
-            $networkType = "Standard"
-        } catch {
-            Write-Host "✗ Network not found. Available networks:" -ForegroundColor Red
-            Write-Host "DVS Portgroups:" -ForegroundColor Yellow
-            Get-VDPortgroup | Sort-Object Name | ForEach-Object { Write-Host "  - $($_.Name)" }
-            Write-Host "Standard Portgroups:" -ForegroundColor Yellow  
-            Get-VirtualPortGroup | Sort-Object Name | ForEach-Object { Write-Host "  - $($_.Name)" }
-            throw "Network '$NetworkName' not found"
-        }
-    }
-    
-    # Select target location and host
-    Write-Host "Selecting deployment target..." -ForegroundColor Yellow
-    if ($ResourcePoolName) {
-        $location = Get-ResourcePool -Name $ResourcePoolName -Location $cluster -ErrorAction Stop
-        Write-Host "✓ Using resource pool: $($location.Name)" -ForegroundColor Green
-    } else {
-        $location = $cluster
-        Write-Host "✓ Using cluster as location: $($location.Name)" -ForegroundColor Green
-    }
-    
-    # Get a connected host from the cluster that can access the datastore
+    # Get host
     $vmHost = $cluster | Get-VMHost | Where-Object { 
         $_.ConnectionState -eq "Connected" -and 
         ($_ | Get-Datastore -Name $DatastoreName -ErrorAction SilentlyContinue)
     } | Select-Object -First 1
     
-    if (!$vmHost) {
-        Write-Host "✗ No suitable host found. Cluster hosts:" -ForegroundColor Red
-        $cluster | Get-VMHost | ForEach-Object {
-            $datastores = ($_ | Get-Datastore).Name -join ", "
-            Write-Host "  - $($_.Name): $($_.ConnectionState) [Datastores: $datastores]"
-        }
-        throw "No connected host in cluster can access datastore"
-    }
-    
     Write-Host "✓ Selected host: $($vmHost.Name)" -ForegroundColor Green
     
-    # Get OVF configuration
-    Write-Host "Reading OVA configuration..." -ForegroundColor Yellow
-    $ovfConfig = Get-OvfConfiguration -Ovf $OVAPath
-    Write-Host "✓ OVA configuration loaded" -ForegroundColor Green
+    # Method 1: Try using ovftool from PowerShell
+    Write-Host "`nAttempting deployment using ovftool..." -ForegroundColor Yellow
     
-    # Configure network mappings properly for DVS
-    Write-Host "Configuring network mappings..." -ForegroundColor Yellow
+    # Check if ovftool is available
+    $ovftoolPath = $null
+    $possiblePaths = @(
+        "C:\Program Files\VMware\VMware OVF Tool\ovftool.exe",
+        "C:\Program Files (x86)\VMware\VMware OVF Tool\ovftool.exe",
+        "/usr/bin/ovftool",
+        "/usr/local/bin/ovftool"
+    )
     
-    if ($networkType -eq "DVS") {
-        # For DVS, we need to handle this differently
-        Write-Host "Configuring for DVS deployment..." -ForegroundColor Yellow
+    foreach ($path in $possiblePaths) {
+        if (Test-Path $path) {
+            $ovftoolPath = $path
+            break
+        }
+    }
+    
+    # Check if ovftool is in PATH
+    if (!$ovftoolPath) {
+        $ovftoolCmd = Get-Command ovftool -ErrorAction SilentlyContinue
+        if ($ovftoolCmd) {
+            $ovftoolPath = "ovftool"
+        }
+    }
+    
+    if ($ovftoolPath) {
+        Write-Host "✓ Found ovftool: $ovftoolPath" -ForegroundColor Green
         
-        # Method 1: Try direct property assignment
-        try {
-            $networkMappings = $ovfConfig.NetworkMapping.PSObject.Properties
-            foreach ($netMapping in $networkMappings) {
-                $netMapping.Value = $network
-                Write-Host "✓ Mapped '$($netMapping.Name)' to DVS portgroup '$($network.Name)'" -ForegroundColor Green
-            }
-        } catch {
-            Write-Host "⚠ Standard DVS mapping failed, trying alternative approach..." -ForegroundColor Yellow
+        # Build ovftool command
+        $target = "vi://$Username@$vCenterServer/$ClusterName/host"
+        
+        $ovftoolArgs = @(
+            "--noSSLVerify",
+            "--acceptAllEulas",
+            "--diskMode=thin",
+            "--datastore=`"$DatastoreName`"",
+            "--network=`"$NetworkName`"",
+            "--name=`"$VMName`"",
+            "--prop:password=`"$RootPassword`"",
+            "--powerOn",
+            "`"$OVAPath`"",
+            "`"$target`""
+        )
+        
+        Write-Host "Deploying OVA with ovftool..." -ForegroundColor Yellow
+        Write-Host "Command: $ovftoolPath $($ovftoolArgs -join ' ')" -ForegroundColor Gray
+        
+        # Create secure string for password
+        $secPassword = ConvertTo-SecureString $Password -AsPlainText -Force
+        $credential = New-Object System.Management.Automation.PSCredential($Username, $secPassword)
+        
+        # Execute ovftool
+        $ovftoolProcess = Start-Process -FilePath $ovftoolPath `
+                                      -ArgumentList $ovftoolArgs `
+                                      -NoNewWindow `
+                                      -PassThru `
+                                      -Wait `
+                                      -RedirectStandardOutput "ovftool_output.txt" `
+                                      -RedirectStandardError "ovftool_error.txt"
+        
+        if ($ovftoolProcess.ExitCode -eq 0) {
+            Write-Host "✓ OVA deployed successfully with ovftool!" -ForegroundColor Green
             
-            # Method 2: Create a temporary standard portgroup as workaround
-            try {
-                # Get the virtual switch on the host
-                $vSwitch = Get-VirtualSwitch -VMHost $vmHost -Standard | Select-Object -First 1
-                if (!$vSwitch) {
-                    # Create a temporary vSwitch if none exists
-                    Write-Host "Creating temporary vSwitch for deployment..." -ForegroundColor Yellow
-                    $vSwitch = New-VirtualSwitch -VMHost $vmHost -Name "vSwitch-Temp" -Nic $null
+            # Get the deployed VM
+            Start-Sleep -Seconds 5
+            $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+            
+            if ($vm) {
+                Write-Host "`n=== Deployment Complete ===" -ForegroundColor Green
+                Write-Host "VM Name: $($vm.Name)"
+                Write-Host "Power State: $($vm.PowerState)"
+                Write-Host "Host: $($vm.VMHost.Name)"
+                Write-Host "Network: $NetworkName (DVS)"
+                
+                # Wait for IP
+                Write-Host "`nWaiting for IP address..." -ForegroundColor Yellow
+                $timeout = 120
+                $elapsed = 0
+                while ($elapsed -lt $timeout) {
+                    $vm = Get-VM -Name $VMName
+                    $ip = $vm.Guest.IPAddress | Where-Object { $_ -ne "127.0.0.1" -and $_ -notlike "fe80:*" } | Select-Object -First 1
+                    if ($ip) {
+                        Write-Host "✓ IP Address: $ip" -ForegroundColor Green
+                        Write-Host "Web Interface: https://$ip:8443" -ForegroundColor Cyan
+                        break
+                    }
+                    Start-Sleep -Seconds 10
+                    $elapsed += 10
+                    Write-Host "." -NoNewline
                 }
                 
-                # Create temporary portgroup
-                $tempPGName = "TEMP-HCIBench-Deploy"
-                Write-Host "Creating temporary portgroup '$tempPGName'..." -ForegroundColor Yellow
-                $tempPG = New-VirtualPortGroup -Name $tempPGName -VirtualSwitch $vSwitch -VLanId 0
-                
-                # Map to temporary portgroup
-                foreach ($netMapping in $ovfConfig.NetworkMapping.PSObject.Properties) {
-                    $netMapping.Value = $tempPG
-                    Write-Host "✓ Mapped '$($netMapping.Name)' to temporary portgroup" -ForegroundColor Green
-                }
-                
-                $usedTempPG = $true
-            } catch {
-                Write-Host "⚠ Temporary portgroup creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
-                $usedTempPG = $false
+                Write-Host "`nLogin: root / $RootPassword" -ForegroundColor Cyan
             }
-        }
-    } else {
-        # Standard portgroup mapping
-        foreach ($netMapping in $ovfConfig.NetworkMapping.PSObject.Properties) {
-            $netMapping.Value = $network
-            Write-Host "✓ Mapped '$($netMapping.Name)' to '$($network.Name)'" -ForegroundColor Green
-        }
-    }
-    
-    # Configure OVF properties for networking
-    $useStaticIP = ![string]::IsNullOrEmpty($IPAddress)
-    Write-Host "Network configuration: $(if ($useStaticIP) { "Static IP ($IPAddress)" } else { "DHCP" })" -ForegroundColor Yellow
-    
-    # Find property section and configure
-    $propSection = $null
-    @("Common", "vami", "Appliance") | ForEach-Object {
-        if ($ovfConfig.PSObject.Properties[$_] -and !$propSection) { 
-            $propSection = $ovfConfig.$_
-            Write-Host "✓ Using OVF property section: $_" -ForegroundColor Green
-        }
-    }
-    
-    if ($propSection) {
-        # Set root password
-        @("passwd", "password", "guestinfo.cis.appliance.root.passwd") | ForEach-Object {
-            if ($propSection.PSObject.Properties[$_]) { 
-                $propSection.$_.Value = $RootPassword
-                Write-Host "✓ Root password configured" -ForegroundColor Green
-                return
-            }
-        }
-        
-        # Configure network properties based on type
-        if ($useStaticIP) {
-            Write-Host "Configuring static IP settings..." -ForegroundColor Yellow
-            # Configure static IP properties
-            @("ip0", "ip", "guestinfo.ip0") | ForEach-Object {
-                if ($propSection.PSObject.Properties[$_]) { 
-                    $propSection.$_.Value = $IPAddress
-                }
-            }
-            @("netmask0", "netmask", "guestinfo.netmask0") | ForEach-Object {
-                if ($propSection.PSObject.Properties[$_]) { 
-                    $propSection.$_.Value = $Netmask
-                }
-            }
-            @("gateway", "guestinfo.gateway") | ForEach-Object {
-                if ($propSection.PSObject.Properties[$_]) { 
-                    $propSection.$_.Value = $Gateway
-                }
-            }
-            @("DNS", "dns", "guestinfo.dns") | ForEach-Object {
-                if ($propSection.PSObject.Properties[$_]) { 
-                    $propSection.$_.Value = $DNS
-                }
-            }
-            Write-Host "✓ Static IP configuration prepared" -ForegroundColor Green
         } else {
-            Write-Host "✓ DHCP configuration (no additional setup needed)" -ForegroundColor Green
-        }
-    } else {
-        Write-Host "⚠ No recognized OVF property section found" -ForegroundColor Yellow
-    }
-    
-    # Deploy the OVA
-    Write-Host "=== Starting OVA Deployment ===" -ForegroundColor Green
-    Write-Host "Source: $OVAPath"
-    Write-Host "Target: $($vmHost.Name) in $($location.Name)"
-    Write-Host "Datastore: $($datastore.Name)"
-    Write-Host "Network: $(if ($usedTempPG) { 'Temporary portgroup (will reconfigure to DVS)' } else { "$($network.Name) [$networkType]" })"
-    
-    $vm = Import-VApp -Source $OVAPath `
-                     -OvfConfiguration $ovfConfig `
-                     -Name $VMName `
-                     -Location $location `
-                     -Datastore $datastore `
-                     -VMHost $vmHost `
-                     -DiskStorageFormat Thin `
-                     -ErrorAction Stop
-    
-    Write-Host "✓ OVA deployed successfully!" -ForegroundColor Green
-    
-    # If we used temporary portgroup, now reconfigure to DVS
-    if ($usedTempPG -and $networkType -eq "DVS") {
-        Write-Host "Reconfiguring network adapters to DVS..." -ForegroundColor Yellow
-        try {
-            $networkAdapters = Get-NetworkAdapter -VM $vm
-            foreach ($adapter in $networkAdapters) {
-                Set-NetworkAdapter -NetworkAdapter $adapter -Portgroup $network -Confirm:$false | Out-Null
-                Write-Host "✓ Connected $($adapter.Name) to DVS portgroup '$($network.Name)'" -ForegroundColor Green
+            Write-Host "✗ ovftool deployment failed. Check ovftool_error.txt for details" -ForegroundColor Red
+            if (Test-Path "ovftool_error.txt") {
+                Get-Content "ovftool_error.txt" | Write-Host -ForegroundColor Red
             }
-            
-            # Clean up temporary portgroup
-            Remove-VirtualPortGroup -VirtualPortGroup $tempPG -Confirm:$false
-            Write-Host "✓ Removed temporary portgroup" -ForegroundColor Green
-            
-            # Remove temp vSwitch if we created it
-            if ($vSwitch.Name -eq "vSwitch-Temp") {
-                Remove-VirtualSwitch -VirtualSwitch $vSwitch -Confirm:$false
-                Write-Host "✓ Removed temporary vSwitch" -ForegroundColor Green
-            }
-        } catch {
-            Write-Host "⚠ Network reconfiguration warning: $($_.Exception.Message)" -ForegroundColor Yellow
         }
-    }
-    
-    # Power on VM
-    Write-Host "Starting VM..." -ForegroundColor Yellow
-    Start-VM -VM $vm -Confirm:$false | Out-Null
-    Write-Host "✓ VM powered on" -ForegroundColor Green
-    
-    # Wait and check for IP
-    Write-Host "Waiting for VM to initialize..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 30
-    
-    # Try to get IP address
-    $retryCount = 0
-    $maxRetries = 6
-    $assignedIP = $null
-    
-    while ($retryCount -lt $maxRetries -and !$assignedIP) {
-        $vm = Get-VM -Name $VMName
-        $assignedIP = $vm.Guest.IPAddress | Where-Object { 
-            $_ -ne "127.0.0.1" -and 
-            $_ -notlike "fe80:*" -and 
-            $_ -ne $null 
-        } | Select-Object -First 1
         
-        if (!$assignedIP) {
-            Write-Host "Waiting for IP address... ($($retryCount + 1)/$maxRetries)" -ForegroundColor Yellow
-            Start-Sleep -Seconds 10
-            $retryCount++
-        }
-    }
-    
-    Write-Host "`n=== Deployment Complete ===" -ForegroundColor Green
-    Write-Host "VM Name: $($vm.Name)"
-    Write-Host "Power State: $($vm.PowerState)"
-    Write-Host "Host: $($vm.VMHost.Name)"
-    Write-Host "Network: $($network.Name)"
-    
-    if ($assignedIP) {
-        Write-Host "IP Address: $assignedIP" -ForegroundColor Cyan
-        Write-Host "Web Interface: https://$assignedIP:8443" -ForegroundColor Cyan
     } else {
-        Write-Host "IP Address: Not yet available (check VM console)" -ForegroundColor Yellow
-        Write-Host "Web Interface: https://[VM_IP]:8443" -ForegroundColor Cyan
-        Write-Host "Note: HCIBench may take a few minutes to obtain an IP via DHCP" -ForegroundColor Yellow
+        Write-Host "✗ ovftool not found" -ForegroundColor Red
+        Write-Host "`nAlternative: Deploy manually through vCenter UI" -ForegroundColor Yellow
+        Write-Host "1. In vCenter, right-click on cluster '$ClusterName'" -ForegroundColor White
+        Write-Host "2. Select 'Deploy OVF Template'" -ForegroundColor White
+        Write-Host "3. Browse to: $OVAPath" -ForegroundColor White
+        Write-Host "4. Select datastore: $DatastoreName" -ForegroundColor White
+        Write-Host "5. Select network: $NetworkName" -ForegroundColor White
+        Write-Host "6. Set root password: $RootPassword" -ForegroundColor White
+        Write-Host "7. Complete the wizard" -ForegroundColor White
     }
-    
-    Write-Host "Login: root / $RootPassword" -ForegroundColor Cyan
-    Write-Host "`nNext steps:" -ForegroundColor Green
-    Write-Host "1. Access the web interface at https://[VM_IP]:8443" -ForegroundColor White
-    Write-Host "2. Complete the HCIBench configuration wizard" -ForegroundColor White
-    Write-Host "3. Configure vSAN test parameters" -ForegroundColor White
     
 } catch {
-    Write-Host "✗ Deployment failed: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Full error: $($_.Exception.ToString())" -ForegroundColor Red
-    
-    # Additional troubleshooting info
-    if ($_.Exception.Message -like "*Host did not have any virtual network defined*") {
-        Write-Host "`nTroubleshooting tips:" -ForegroundColor Yellow
-        Write-Host "- This error typically occurs with DVS network mappings" -ForegroundColor Yellow
-        Write-Host "- The script attempted to work around this by creating temporary portgroups" -ForegroundColor Yellow
-        Write-Host "- You may need to manually deploy the OVA through vCenter UI" -ForegroundColor Yellow
-    }
+    Write-Host "✗ Error: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "`nFor pure DVS environments, consider:" -ForegroundColor Yellow
+    Write-Host "1. Install ovftool and use the bash script provided" -ForegroundColor White
+    Write-Host "2. Deploy through vCenter UI manually" -ForegroundColor White
+    Write-Host "3. Use Content Library deployment method" -ForegroundColor White
 } finally {
-    # Clean up any temporary resources if they exist
-    if ($tempPG) {
-        try {
-            Remove-VirtualPortGroup -VirtualPortGroup $tempPG -Confirm:$false -ErrorAction SilentlyContinue
-        } catch {}
-    }
+    # Cleanup
+    Remove-Item "ovftool_output.txt", "ovftool_error.txt" -ErrorAction SilentlyContinue
     
     if ($global:DefaultVIServers) {
         Disconnect-VIServer -Server * -Confirm:$false -Force
