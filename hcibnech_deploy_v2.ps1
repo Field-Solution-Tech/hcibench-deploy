@@ -1,4 +1,5 @@
 # .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "mgmt-vds01-wld01-01a" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
+# Simple HCIBench OVA Deployment Script for vSAN + DVS environments
 
 param(
     [Parameter(Mandatory=$true)]
@@ -123,20 +124,9 @@ try {
         Write-Host "  - $netName" -ForegroundColor Cyan
     }
     
-    # For DVS + vSAN, skip network mapping and configure after deployment
-    if ($networkType -eq "DVS") {
-        Write-Host "⚠ Skipping network mapping for DVS - will configure after deployment" -ForegroundColor Yellow
-    } else {
-        Write-Host "Attempting network mapping for standard networks..." -ForegroundColor Yellow
-        foreach ($netMapping in $networkMappings) {
-            try {
-                $ovfConfig.NetworkMapping.($netMapping.Name) = $network
-                Write-Host "    ✓ Mapped $($netMapping.Name)" -ForegroundColor Green
-            } catch {
-                Write-Host "    ✗ Failed to map $($netMapping.Name)" -ForegroundColor Red
-            }
-        }
-    }
+    # For DVS + vSAN, skip network mapping completely and deploy without it
+    Write-Host "⚠ Skipping network mapping for DVS deployment - will configure after deployment" -ForegroundColor Yellow
+    Write-Host "✓ Network mapping skipped" -ForegroundColor Green
     
     # Configure OVF properties for networking
     $useStaticIP = ![string]::IsNullOrEmpty($IPAddress)
