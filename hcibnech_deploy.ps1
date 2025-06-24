@@ -1,5 +1,4 @@
 # Simple HCIBench OVA Deployment Script for vSAN + DVS environments
-# .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "mgmt-vds01-wld01-01a" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
 
 param(
     [Parameter(Mandatory=$true)]
@@ -119,14 +118,35 @@ try {
     Write-Host "OVA networks found:" -ForegroundColor Cyan
     
     $networkCount = 0
-    $ovfConfig.NetworkMapping.PSObject.Properties | ForEach-Object {
+    foreach ($netMapping in $ovfConfig.NetworkMapping.PSObject.Properties) {
         $networkCount++
-        $netName = if ([string]::IsNullOrWhiteSpace($_.Name)) { "[Default]" } else { $_.Name }
+        $netName = if ([string]::IsNullOrWhiteSpace($netMapping.Name)) { "[Default]" } else { $netMapping.Name }
         Write-Host "  Network $networkCount`: $netName" -ForegroundColor Cyan
-        $_.Value = $network
+        
+        # Use the proper way to set network mapping for DVS
+        try {
+            if ($networkType -eq "DVS") {
+                # For DVS, we need to use the network object differently
+                $ovfConfig.NetworkMapping.($netMapping.Name) = $network
+            } else {
+                # For standard networks
+                $netMapping.Value = $network
+            }
+            Write-Host "    ✓ Mapped to $($network.Name)" -ForegroundColor Green
+        } catch {
+            Write-Host "    ✗ Mapping failed: $($_.Exception.Message)" -ForegroundColor Red
+            # Try alternative approach
+            try {
+                $ovfConfig.NetworkMapping.($netMapping.Name) = $network
+                Write-Host "    ✓ Mapped using alternative method" -ForegroundColor Green
+            } catch {
+                Write-Host "    ✗ All mapping methods failed" -ForegroundColor Red
+                throw "Cannot map network $($netMapping.Name)"
+            }
+        }
     }
     
-    Write-Host "✓ Mapped $networkCount network(s) to $($network.Name) [$networkType]" -ForegroundColor Green
+    Write-Host "✓ Configured $networkCount network mapping(s)" -ForegroundColor Green
     
     # Configure OVF properties for networking
     $useStaticIP = ![string]::IsNullOrEmpty($IPAddress)
