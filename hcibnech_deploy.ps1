@@ -1,6 +1,6 @@
 # Simple HCIBench OVA Deployment Script for Lab Use
 # Deploys HCIBench OVA with DHCP or Static IP configuration
-# example .\Deploy-HCIBench.ps1 -vCenterServer "vcenter.lab" -Username "administrator@vsphere.local" -Password "VMware123!" -OVAPath "C:\HCIBench.ova" -VMName "HCIBench-01" -DatastoreName "datastore1" -NetworkName "VM Network" -RootPassword "VMware123!"
+# .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "hci-bench" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
 
 param(
     [Parameter(Mandatory=$true)]
@@ -47,26 +47,62 @@ try {
     
     # Get infrastructure objects
     $datastore = Get-Datastore -Name $DatastoreName -ErrorAction Stop
-    $network = Get-VirtualPortGroup -Name $NetworkName -ErrorAction Stop
+    Write-Host "Found datastore: $($datastore.Name)"
     
-    # Determine deployment location
+    # Check if datastore suggests cluster usage (like vSAN)
+    if ($DatastoreName -like "*vsan*" -and !$ClusterName) {
+        Write-Host "WARNING: Datastore name suggests vSAN - you may need to specify -ClusterName" -ForegroundColor Yellow
+    }
+    
+    # Determine deployment location first
     if ($ClusterName) {
+        Write-Host "Looking for cluster: $ClusterName"
         $cluster = Get-Cluster -Name $ClusterName -ErrorAction Stop
         $vmHost = $cluster | Get-VMHost | Where-Object {$_.ConnectionState -eq "Connected"} | Select-Object -First 1
         $location = if ($ResourcePoolName) { Get-ResourcePool -Name $ResourcePoolName -Location $cluster } else { $cluster }
+        Write-Host "Using cluster deployment"
     } else {
         $vmHost = Get-VMHost | Where-Object {$_.ConnectionState -eq "Connected"} | Select-Object -First 1
         $location = $vmHost
+        Write-Host "Using standalone host deployment"
+    }
+    
+    if (!$vmHost) {
+        throw "No connected ESXi hosts found"
+    }
+    
+    # Get network - try to find it on the selected host/cluster
+    Write-Host "Looking for network '$NetworkName' on $($vmHost.Name)..."
+    try {
+        if ($ClusterName) {
+            # For cluster deployment, get network from cluster
+            $network = Get-VirtualPortGroup -Name $NetworkName -VMHost $vmHost -ErrorAction Stop
+        } else {
+            # For standalone host, get network from specific host
+            $network = Get-VirtualPortGroup -Name $NetworkName -VMHost $vmHost -ErrorAction Stop
+        }
+        Write-Host "Found network: $($network.Name)"
+    } catch {
+        Write-Host "Network '$NetworkName' not found. Available networks on $($vmHost.Name):" -ForegroundColor Red
+        Get-VirtualPortGroup -VMHost $vmHost | ForEach-Object { Write-Host "  - $($_.Name)" -ForegroundColor Yellow }
+        throw "Network '$NetworkName' not available on host $($vmHost.Name)"
     }
     
     Write-Host "Deploying to: $($location.Name) on host: $($vmHost.Name)" -ForegroundColor Yellow
     
-    # Get OVF configuration
+    # Get OVF configuration and show network requirements
+    Write-Host "Reading OVA configuration..." -ForegroundColor Green
     $ovfConfig = Get-OvfConfiguration -Ovf $OVAPath
     
-    # Map networks
+    # Show required networks in OVA
+    Write-Host "Networks required by OVA:" -ForegroundColor Yellow
+    $ovfConfig.NetworkMapping.Keys | ForEach-Object { Write-Host "  - $_" -ForegroundColor Cyan }
+    
+    # Map all required networks to our target network
+    Write-Host "Mapping networks to: $($network.Name)" -ForegroundColor Green
     foreach ($netKey in $ovfConfig.NetworkMapping.Keys) {
         $ovfConfig.NetworkMapping.$netKey = $network
+        Write-Host "  $netKey -> $($network.Name)"
     }
     
     # Configure OVF properties
