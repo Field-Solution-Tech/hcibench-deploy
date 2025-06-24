@@ -1,4 +1,4 @@
-# Simple HCIBench OVA Deployment Script for vSAN + DVS environments
+# .\hcibench_deploy.ps1 -vCenterServer "vc-wld01-a.site-a.vcf.lab" -Username "administrator@wld.sso" -Password "VMware123!VMware123!" -OVAPath "/home/holuser/Downloads/HCIBench_2.8.3.ova" -VMName "HCIBench-01" -DatastoreName "cluster-wld01-01a-vsan01" -NetworkName "mgmt-vds01-wld01-01a" -ClusterName "cluster-wld01-01a" -RootPassword "VMware123!"
 
 param(
     [Parameter(Mandatory=$true)]
